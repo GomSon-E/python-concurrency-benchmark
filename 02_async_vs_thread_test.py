@@ -7,6 +7,8 @@
 import asyncio
 import aiohttp
 import requests
+from requests.adapters import HTTPAdapter
+import threading
 import time
 import tracemalloc
 import gc
@@ -19,9 +21,24 @@ MAX_WORKERS = 50  # 스레드 풀 최대 워커 수
 
 
 # ============== 멀티스레드 방식 ==============
+thread_local = threading.local()
+
+
+def get_session() -> requests.Session:
+    """스레드별 세션 생성 (커넥션 풀링 적용)"""
+    if not hasattr(thread_local, "session"):
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=MAX_WORKERS)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        thread_local.session = session
+    return thread_local.session
+
+
 def thread_fetch(url: str) -> dict:
-    """스레드에서 단일 API 호출"""
-    response = requests.get(url)
+    """스레드에서 단일 API 호출 (세션 재사용)"""
+    session = get_session()
+    response = session.get(url)
     return response.json()
 
 

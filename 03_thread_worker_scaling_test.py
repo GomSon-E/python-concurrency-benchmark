@@ -7,6 +7,8 @@
 import asyncio
 import aiohttp
 import requests
+from requests.adapters import HTTPAdapter
+import threading
 import time
 import tracemalloc
 import gc
@@ -14,14 +16,29 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 테스트 설정
 BASE_URL = "https://jsonplaceholder.typicode.com"
-NUM_REQUESTS = 200  # 요청 수 (테스트 시간 단축을 위해 200개)
-WORKER_COUNTS = [50, 100, 200, 1000]  # 테스트할 워커 수
+NUM_REQUESTS = 500  # 요청 수 (테스트 시간 단축을 위해 200개)
+WORKER_COUNTS = [1, 2, 5, 10, 20, 50, 100]  # 테스트할 워커 수
 
 
 # ============== 멀티스레드 방식 ==============
-def thread_fetch(url: str) -> dict:
-    """스레드에서 단일 API 호출"""
-    response = requests.get(url)
+thread_local = threading.local()
+
+
+def get_session(pool_maxsize: int) -> requests.Session:
+    """스레드별 세션 생성 (커넥션 풀링 적용)"""
+    if not hasattr(thread_local, "session") or thread_local.pool_maxsize != pool_maxsize:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=pool_maxsize)
+        session.mount("https://", adapter)
+        thread_local.session = session
+        thread_local.pool_maxsize = pool_maxsize
+    return thread_local.session
+
+
+def thread_fetch(url: str, pool_maxsize: int) -> dict:
+    """스레드에서 단일 API 호출 (세션 재사용)"""
+    session = get_session(pool_maxsize)
+    response = session.get(url)
     return response.json()
 
 
@@ -29,7 +46,7 @@ def thread_fetch_all(urls: list[str], max_workers: int) -> list[dict]:
     """멀티스레드 방식으로 모든 API 동시 호출"""
     results = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_url = {executor.submit(thread_fetch, url): url for url in urls}
+        future_to_url = {executor.submit(thread_fetch, url, max_workers): url for url in urls}
         for future in as_completed(future_to_url):
             results.append(future.result())
     return results
